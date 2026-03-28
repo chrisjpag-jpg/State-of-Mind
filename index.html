@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>State of Mind Code Test - The Thinking Fix</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      display: flex;
+      justify-content: center;  
+      align-items: center;      
+      background: #ffffff;  
+    }
+    canvas {
+      width: 400px;
+      max-width: 100%;
+    }
+  </style>
+
+  <script src="https://unpkg.com/@rive-app/webgl2"></script>
+</head>
+
+<body>
+  <canvas id="rive-canvas" width="390" height="844"></canvas>
+
+  <script>
+    let charVM; 
+    
+    let goodMood, okayMood, badMood;
+    let aiTextLoading, aiTextLoaded, aiTextOut;
+    let aiGenText;
+    
+    let currentMood = "NONE"; 
+    let isAnimatingOut = false; 
+
+    const r = new rive.Rive({
+      src: 'stateofmind_v005.riv',
+      canvas: document.getElementById('rive-canvas'),
+      autoplay: true,
+      autoBind: true, 
+      artboard: 'ALLDESIGNS_Text', 
+      stateMachines: 'State Machine 1',
+
+      onLoad: () => {
+        console.log("[SYSTEM] Rive loaded. Hooking into ViewModel...");
+        
+        charVM = r.viewModelInstance;
+
+        if (!charVM) {
+          console.error("[ERROR] No ViewModel found!");
+          return;
+        }
+
+        goodMood = charVM.boolean('goodMood');
+        okayMood = charVM.boolean('okayMood');
+        badMood  = charVM.boolean('badMood');
+        
+        aiTextLoading = charVM.boolean('aiTextLoading');
+        aiTextLoaded  = charVM.boolean('aiTextLoaded');
+        aiTextOut     = charVM.boolean('aiTextOut');
+        
+        aiGenText = charVM.string('aiGenText');
+
+        if (aiGenText) aiGenText.value = ''; 
+        if (aiTextLoading) aiTextLoading.value = false;
+        if (aiTextLoaded) aiTextLoaded.value = false;
+        if (aiTextOut) aiTextOut.value = false;
+
+        setInterval(checkRiveBooleans, 100);
+        r.resizeDrawingSurfaceToCanvas();
+      }
+    });
+
+    window.addEventListener('resize', () => r.resizeDrawingSurfaceToCanvas());
+
+    function checkRiveBooleans() {
+      if (!goodMood || !okayMood || !badMood || isAnimatingOut) return;
+
+      let detectedMood = "NONE";
+      if (goodMood.value === true) detectedMood = "GOOD";
+      else if (okayMood.value === true) detectedMood = "OKAY";
+      else if (badMood.value === true) detectedMood = "BAD";
+
+      if (detectedMood !== currentMood) {
+        let oldMood = currentMood;
+        currentMood = detectedMood; 
+        
+        handleMoodTransition(currentMood, oldMood);
+      }
+    }
+
+    async function handleMoodTransition(newMood, oldMood) {
+      isAnimatingOut = true; 
+
+      if (oldMood !== "NONE") {
+        if(aiTextLoading) aiTextLoading.value = false;
+        if(aiTextLoaded) aiTextLoaded.value = false;
+        if(aiTextOut) aiTextOut.value = true; 
+        
+        await new Promise(resolve => setTimeout(resolve, 299)); 
+        
+        if(aiTextOut) aiTextOut.value = false; 
+        if(aiGenText) aiGenText.value = ""; 
+      }
+
+      if (newMood === "NONE") {
+        if(aiTextLoading) aiTextLoading.value = false;
+        if(aiTextLoaded) aiTextLoaded.value = false;
+        if(aiTextOut) aiTextOut.value = false;
+        isAnimatingOut = false;
+        return;
+      }
+
+      if(aiTextLoading) aiTextLoading.value = true;
+      if(aiTextLoaded) aiTextLoaded.value = false;
+      if(aiTextOut) aiTextOut.value = false;
+
+      isAnimatingOut = false; 
+      fetchGeminiQuip(newMood);
+    }
+
+    async function fetchGeminiQuip(mood) {
+      // Prompts updated to standardize 2 to 5 words and remove quotes from examples
+      const prompts = {
+        'GOOD': "Write a 2 to 5 word phrase a happy character would say to someone having a good day. Examples: Hip hip hooray!, Awesomesauce!. Output only the phrase itself, without any introductory text, quotes, or extra words.",
+        'OKAY': "Write a 2 to 5 word phrase an indifferent person would say to someone having an average day. Examples: Living the dream?, Could be worse. Output only the phrase itself, without any introductory text, quotes, or extra words.",
+        'BAD':  "Write a 2 to 5 word phrase a sad person would say to someone having a bad day. Examples: This too shall pass, Better days ahead. Output only the phrase itself, without any introductory text, quotes, or extra words."
+      };
+
+      // Pointing directly to the Netlify Function instead of the Google API
+      const url = '/.netlify/functions/gemini';
+      
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Sending only the text prompt to the backend
+          body: JSON.stringify({
+            promptText: prompts[mood]
+          })
+        });
+
+        const data = await response.json();
+        
+        console.log("RAW API RESPONSE:", JSON.stringify(data, null, 2));
+
+        if (data.error) throw new Error(data.error.message || "Netlify Function Error");
+
+        const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (generatedText) {
+          // Stripping out any accidental quotes just in case the AI ignores instructions
+          let aiPhrase = generatedText.trim().replace(/['"]+/g, '');
+          
+          if (currentMood === mood) {
+             if(aiGenText) aiGenText.value = aiPhrase;
+             
+             if(aiTextLoading) aiTextLoading.value = false;
+             if(aiTextLoaded) aiTextLoaded.value = true;
+             if(aiTextOut) aiTextOut.value = false;
+          }
+        } else {
+          throw new Error("API returned an empty or malformed text block.");
+        }
+      } catch (err) {
+        console.warn("[API ERROR] Using Backup.", err);
+        
+        const backupPhrases = {
+          'GOOD': ['Yay!'],
+          'OKAY': ['Eh?'],
+          'BAD':  ['Ugh.']
+        };
+
+        if (currentMood === mood) {
+          const randomList = backupPhrases[mood];
+          const randomChoice = randomList[Math.floor(Math.random() * randomList.length)];
+          
+          if(aiGenText) aiGenText.value = randomChoice;
+          if(aiTextLoading) aiTextLoading.value = false;
+          if(aiTextLoaded) aiTextLoaded.value = true;
+          if(aiTextOut) aiTextOut.value = false;
+        }
+      }
+    }
+  </script>
+</body>
+</html>
